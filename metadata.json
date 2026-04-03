@@ -1,5 +1,0 @@
-{
-  "name": "Live Mic",
-  "description": "Aplikasi web yang mengubah handphone menjadi mikrofon dan speaker digital untuk siaran langsung satu arah.",
-  "requestFramePermissions": ["microphone"]
-}
