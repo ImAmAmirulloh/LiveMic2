@@ -7,7 +7,7 @@
 // ===== Configuration =====
 const CONFIG = {
     // Railway Server URL
-    SERVER_URL: 'https://reliable-clarity.up.railway.app',
+    SERVER_URL: '',
 
     // STUN/TURN servers untuk WebRTC
     ICE_SERVERS: [
@@ -214,10 +214,6 @@ function connectToServer() {
     // ===== Listener: Handle speaker going live =====
     state.socket.on('speaker-live', () => {
         showToast('Pembicara sedang live!');
-        // Create peer connection to receive audio
-        if (state.mode === 'listener' && state.isConnected) {
-            createListenerPeerConnection();
-        }
     });
 
     state.socket.on('speaker-ended', () => {
@@ -271,12 +267,6 @@ function goBack() {
     }
     if (state.isConnected) {
         leaveRoom();
-    }
-
-    // Disconnect socket
-    if (state.socket) {
-        state.socket.disconnect();
-        state.socket = null;
     }
 
     // Reset state
@@ -504,12 +494,23 @@ function createPeerConnection(targetSocketId) {
 
     const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
 
-    // Add local stream tracks
+    // Add local stream tracks (Speaker)
     if (state.localStream) {
         state.localStream.getTracks().forEach(track => {
             pc.addTrack(track, state.localStream);
         });
     }
+
+    // Handle incoming tracks (Listener)
+    pc.ontrack = (event) => {
+        console.log('Received audio track:', event.track);
+        if (state.mode === 'listener' && state.audioElement) {
+            state.audioElement.srcObject = event.streams[0];
+            state.audioElement.play().catch(err => {
+                console.log('Auto-play prevented, user interaction required');
+            });
+        }
+    };
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
@@ -517,8 +518,7 @@ function createPeerConnection(targetSocketId) {
             console.log('Sending ICE candidate to:', targetSocketId);
             state.socket.emit('ice-candidate', {
                 candidate: event.candidate,
-                to: targetSocketId,
-                type: 'speaker'
+                to: targetSocketId
             });
         }
     };
@@ -528,6 +528,7 @@ function createPeerConnection(targetSocketId) {
         console.log(`Connection with ${targetSocketId}:`, pc.connectionState);
         if (pc.connectionState === 'connected') {
             state.connectedPeers.add(targetSocketId);
+            if (state.mode === 'listener') showToast('Terhubung ke pembicara!');
         } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
             state.connectedPeers.delete(targetSocketId);
         }
@@ -558,7 +559,7 @@ async function createOfferForListener(listenerSocketId) {
 }
 
 /**
- * Handle incoming offer from listener
+ * Handle incoming offer
  */
 async function handleOffer(offer, fromSocketId, fromName) {
     const pc = createPeerConnection(fromSocketId);
@@ -573,11 +574,6 @@ async function handleOffer(offer, fromSocketId, fromName) {
             answer: pc.localDescription,
             to: fromSocketId
         });
-
-        // Add to listeners if not already
-        if (!state.listeners.has(fromSocketId)) {
-            addListener(fromSocketId, fromName, Date.now());
-        }
     } catch (err) {
         console.error('Error handling offer:', err);
     }
@@ -629,71 +625,6 @@ function closePeerConnection(socketId) {
     }
 }
 
-// ===== Listener WebRTC Functions =====
-
-/**
- * Create peer connection for listener to receive audio from speaker
- */
-function createListenerPeerConnection() {
-    // For listener, we need to connect to the speaker
-    // The speaker socket ID is stored when joining
-    // We'll create a connection and wait for the offer
-
-    const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-
-    // Handle incoming tracks (audio from speaker)
-    pc.ontrack = (event) => {
-        console.log('Received audio track from speaker:', event.track);
-        if (state.audioElement) {
-            state.audioElement.srcObject = event.streams[0];
-            // Try to play
-            state.audioElement.play().catch(err => {
-                console.log('Auto-play prevented, user interaction required');
-            });
-        }
-    };
-
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-        if (event.candidate) {
-            console.log('Sending ICE candidate to speaker');
-            state.socket.emit('ice-candidate', {
-                candidate: event.candidate,
-                type: 'listener'
-            });
-        }
-    };
-
-    // Handle connection state
-    pc.onconnectionstatechange = () => {
-        console.log('Listener connection state:', pc.connectionState);
-        if (pc.connectionState === 'connected') {
-            showToast('Terhubung ke pembicara!');
-        }
-    };
-
-    // Store the peer connection
-    state.peerConnections.set('speaker', pc);
-    return pc;
-}
-
-/**
- * Handle answer from speaker (for listener)
- */
-async function handleAnswer(answer, fromSocketId) {
-    const pc = state.peerConnections.get('speaker') || state.peerConnections.get(fromSocketId);
-    if (!pc) {
-        console.error('No peer connection found for listener');
-        return;
-    }
-
-    try {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-    } catch (err) {
-        console.error('Error handling answer:', err);
-    }
-}
-
 // ===== Listener Functions =====
 
 /**
@@ -734,6 +665,7 @@ async function joinRoom() {
             }
 
             state.speakerName = response.speakerName;
+            state.speakerSocketId = response.speakerSocketId;
             state.isConnected = true;
 
             // Create audio element for receiving audio
@@ -769,10 +701,9 @@ async function joinRoom() {
  * Leave current room
  */
 function leaveRoom() {
-    // Disconnect socket
-    if (state.socket) {
-        state.socket.disconnect();
-        state.socket = null;
+    // Notify server
+    if (state.socket && state.isConnected) {
+        state.socket.emit('leave-room');
     }
 
     // Close all peer connections

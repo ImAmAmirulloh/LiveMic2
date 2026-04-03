@@ -221,75 +221,82 @@ io.on('connection', (socket) => {
             success: true,
             roomCode: code,
             speakerName: room.speaker.name,
+            speakerSocketId: room.speaker.socketId,
             listeners: listenerList
         });
     });
 
-    // ===== WebRTC Signaling: Offer (Listener -> Speaker) =====
-    socket.on('offer', (data, callback) => {
-        const { offer, to } = data;
-
-        if (!currentRoom) {
-            return callback({ success: false, error: 'Not in a room' });
-        }
+    // ===== Listener: Leave Room =====
+    socket.on('leave-room', (callback) => {
+        if (!currentRoom) return callback?.({ success: false });
 
         const room = rooms.get(currentRoom);
-        if (!room || !room.speaker) {
-            return callback({ success: false, error: 'No speaker in room' });
+        if (!room) return callback?.({ success: false });
+
+        if (userType === 'listener') {
+            room.listeners.delete(socket.id);
+
+            if (room.speaker) {
+                io.to(room.speaker.socketId).emit('listener-left', {
+                    socketId: socket.id,
+                    name: userName
+                });
+
+                io.to(room.speaker.socketId).emit('listener-count', {
+                    count: room.listeners.size
+                });
+            }
+
+            // Clean up empty rooms
+            if (!room.speaker && room.listeners.size === 0) {
+                rooms.delete(currentRoom);
+            }
+        } else if (userType === 'speaker') {
+            room.listeners.forEach((listener, listenerSocketId) => {
+                io.to(listenerSocketId).emit('speaker-ended');
+            });
+            rooms.delete(currentRoom);
         }
 
-        // Forward offer to speaker
-        io.to(room.speaker.socketId).emit('offer', {
-            offer,
-            from: socket.id,
-            fromName: userName
-        });
-
-        callback({ success: true });
+        currentRoom = null;
+        userType = null;
+        callback?.({ success: true });
     });
 
-    // ===== WebRTC Signaling: Answer (Speaker -> Listener) =====
+    // ===== WebRTC Signaling: Offer =====
+    socket.on('offer', (data, callback) => {
+        const { offer, to } = data;
+        if (to) {
+            io.to(to).emit('offer', {
+                offer,
+                from: socket.id,
+                fromName: userName
+            });
+        }
+        callback?.({ success: true });
+    });
+
+    // ===== WebRTC Signaling: Answer =====
     socket.on('answer', (data, callback) => {
         const { answer, to } = data;
-
-        // Send answer directly to the listener who requested it
         if (to) {
             io.to(to).emit('answer', {
                 answer,
                 from: socket.id
             });
         }
-
-        callback({ success: true });
+        callback?.({ success: true });
     });
 
     // ===== WebRTC Signaling: ICE Candidate =====
     socket.on('ice-candidate', (data, callback) => {
-        const { candidate, to, type } = data;
-
-        if (!currentRoom) return;
-
-        const room = rooms.get(currentRoom);
-        if (!room) return;
-
-        if (type === 'listener') {
-            // Listener sending ICE to speaker
-            if (room.speaker) {
-                io.to(room.speaker.socketId).emit('ice-candidate', {
-                    candidate,
-                    from: socket.id
-                });
-            }
-        } else {
-            // Speaker sending ICE to specific listener
-            if (to) {
-                io.to(to).emit('ice-candidate', {
-                    candidate,
-                    from: socket.id
-                });
-            }
+        const { candidate, to } = data;
+        if (to) {
+            io.to(to).emit('ice-candidate', {
+                candidate,
+                from: socket.id
+            });
         }
-
         callback?.({ success: true });
     });
 
