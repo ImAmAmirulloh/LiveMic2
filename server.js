@@ -77,7 +77,7 @@ io.on('connection', (socket) => {
 
     // ===== Speaker: Create Room =====
     socket.on('create-room', (data, callback) => {
-        const { roomCode, name } = data;
+        const { roomCode, name, peerId } = data;
 
         if (!roomCode || !name) {
             return callback({ success: false, error: 'Room code and name required' });
@@ -95,7 +95,7 @@ io.on('connection', (socket) => {
 
         // Create new room
         const room = {
-            speaker: { socketId: socket.id, name },
+            speaker: { socketId: socket.id, name, peerId },
             listeners: new Map(),
             createdAt: Date.now()
         };
@@ -169,7 +169,7 @@ io.on('connection', (socket) => {
 
     // ===== Listener: Join Room =====
     socket.on('join-room', (data, callback) => {
-        const { roomCode, name } = data;
+        const { roomCode, name, peerId } = data;
 
         if (!roomCode || !name) {
             return callback({ success: false, error: 'Room code and name required' });
@@ -189,6 +189,7 @@ io.on('connection', (socket) => {
         // Add listener to room
         room.listeners.set(socket.id, {
             name,
+            peerId,
             joinedAt: Date.now()
         });
 
@@ -200,6 +201,7 @@ io.on('connection', (socket) => {
         io.to(room.speaker.socketId).emit('listener-joined', {
             socketId: socket.id,
             name,
+            peerId,
             joinedAt: Date.now()
         });
 
@@ -214,6 +216,7 @@ io.on('connection', (socket) => {
         const listenerList = Array.from(room.listeners.entries()).map(([id, data]) => ({
             id,
             name: data.name,
+            peerId: data.peerId,
             joinedAt: data.joinedAt
         }));
 
@@ -222,6 +225,7 @@ io.on('connection', (socket) => {
             roomCode: code,
             speakerName: room.speaker.name,
             speakerSocketId: room.speaker.socketId,
+            speakerPeerId: room.speaker.peerId,
             listeners: listenerList
         });
     });
@@ -260,43 +264,6 @@ io.on('connection', (socket) => {
 
         currentRoom = null;
         userType = null;
-        callback?.({ success: true });
-    });
-
-    // ===== WebRTC Signaling: Offer =====
-    socket.on('offer', (data, callback) => {
-        const { offer, to } = data;
-        if (to) {
-            io.to(to).emit('offer', {
-                offer,
-                from: socket.id,
-                fromName: userName
-            });
-        }
-        callback?.({ success: true });
-    });
-
-    // ===== WebRTC Signaling: Answer =====
-    socket.on('answer', (data, callback) => {
-        const { answer, to } = data;
-        if (to) {
-            io.to(to).emit('answer', {
-                answer,
-                from: socket.id
-            });
-        }
-        callback?.({ success: true });
-    });
-
-    // ===== WebRTC Signaling: ICE Candidate =====
-    socket.on('ice-candidate', (data, callback) => {
-        const { candidate, to } = data;
-        if (to) {
-            io.to(to).emit('ice-candidate', {
-                candidate,
-                from: socket.id
-            });
-        }
         callback?.({ success: true });
     });
 
